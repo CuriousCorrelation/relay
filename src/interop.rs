@@ -1,47 +1,9 @@
 use std::collections::HashMap;
 
-use http::{StatusCode, Method};
+use http::{Method, StatusCode, Version};
 use serde::{Deserialize, Serialize};
 use strum::Display;
 use time::OffsetDateTime;
-
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Display)]
-pub enum Protocol {
-    #[serde(rename = "http/1.0")]
-    #[strum(to_string = "http/1.0")]
-    Http10,
-    #[serde(rename = "http/1.1")]
-    #[strum(to_string = "http/1.1")]
-    Http11,
-    #[serde(rename = "http/2")]
-    #[strum(to_string = "http/1.2")]
-    Http2,
-    #[serde(rename = "http/3")]
-    #[strum(to_string = "http/3")]
-    Http3,
-}
-
-impl Protocol {
-    pub fn to_curl_version(&self) -> curl::easy::HttpVersion {
-        match self {
-            Protocol::Http10 => curl::easy::HttpVersion::V10,
-            Protocol::Http11 => curl::easy::HttpVersion::V11,
-            Protocol::Http2 => curl::easy::HttpVersion::V2,
-            Protocol::Http3 => curl::easy::HttpVersion::V3,
-        }
-    }
-
-    pub fn from_curl_version(version: curl::easy::HttpVersion) -> Self {
-        match version {
-            curl::easy::HttpVersion::V10 => Protocol::Http10,
-            curl::easy::HttpVersion::V11 => Protocol::Http11,
-            curl::easy::HttpVersion::V2 => Protocol::Http2,
-            curl::easy::HttpVersion::V3 => Protocol::Http3,
-            _ => Protocol::Http11,
-        }
-    }
-}
-
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Display)]
 pub enum MediaType {
@@ -206,7 +168,8 @@ pub struct Request {
     pub url: String,
     #[serde(with = "http_serde::method")]
     pub method: Method,
-    pub protocol: Protocol,
+    #[serde(with = "http_serde::version")]
+    pub version: Version,
     pub headers: Option<HashMap<String, Vec<String>>>,
     pub params: Option<HashMap<String, Vec<String>>>,
     pub content: Option<ContentType>,
@@ -222,7 +185,8 @@ pub struct Response {
     pub status: StatusCode,
     #[serde(rename = "statusText")]
     pub status_text: String,
-    pub protocol: Protocol,
+    #[serde(with = "http_serde::version")]
+    pub version: Version,
     pub headers: HashMap<String, Vec<String>>,
     pub cookies: Option<Vec<Cookie>>,
     pub content: ContentType,

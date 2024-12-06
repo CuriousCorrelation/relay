@@ -7,6 +7,7 @@ use crate::{
     header::HeadersBuilder,
     interop::Request,
     security::SecurityHandler,
+    util::ToCurlVersion,
 };
 
 pub(crate) struct CurlRequest<'a> {
@@ -48,7 +49,7 @@ impl<'a> CurlRequest<'a> {
         })?;
 
         self.handle
-            .http_version(self.request.protocol.to_curl_version())
+            .http_version(self.request.version.to_curl_version())
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to set HTTP version");
                 RelayError::Network {
@@ -99,19 +100,19 @@ impl<'a> CurlRequest<'a> {
                 })?;
 
             if let Some(ref auth) = proxy.auth {
-                self.handle.proxy_username(&auth.username).map_err(|e| {
-                    RelayError::Network {
+                self.handle
+                    .proxy_username(&auth.username)
+                    .map_err(|e| RelayError::Network {
                         message: "Failed to set proxy username".into(),
                         cause: Some(e.to_string()),
-                    }
-                })?;
+                    })?;
 
-                self.handle.proxy_password(&auth.password).map_err(|e| {
-                    RelayError::Network {
+                self.handle
+                    .proxy_password(&auth.password)
+                    .map_err(|e| RelayError::Network {
                         message: "Failed to set proxy password".into(),
                         cause: Some(e.to_string()),
-                    }
-                })?;
+                    })?;
             }
         }
 

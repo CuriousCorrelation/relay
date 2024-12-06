@@ -42,7 +42,7 @@ let request = Request {
     id: 1,
     url: "https://api.example.com".to_string(),
     method: Method::Get,
-    protocol: Protocol::Http2,
+    version: Version::Http2,
     // ... configure other options
 };
 

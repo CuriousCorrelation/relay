@@ -10,5 +10,5 @@ mod security;
 mod transfer;
 mod util;
 
-pub use relay::{cancel, execute};
 pub use interop::{Request, Response};
+pub use relay::{cancel, execute};

@@ -77,7 +77,7 @@ fn execute_request(request: &Request, cancel_token: &CancellationToken) -> Resul
         header_size,
         start_time,
         SystemTime::now(),
-        request.protocol.clone(),
+        request.version.clone(),
     )
     .build()
 }

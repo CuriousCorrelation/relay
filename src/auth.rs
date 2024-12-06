@@ -2,7 +2,11 @@ use std::collections::HashMap;
 
 use curl::easy::Easy;
 
-use crate::{error::{RelayError, Result}, header::HeadersBuilder, interop::AuthType};
+use crate::{
+    error::{RelayError, Result},
+    header::HeadersBuilder,
+    interop::AuthType,
+};
 
 pub(crate) struct AuthHandler<'a> {
     handle: &'a mut Easy,

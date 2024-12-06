@@ -179,12 +179,10 @@ impl<'a> ContentHandler<'a> {
 
         HeadersBuilder::new(self.handle).add_content_type(&media_type.to_string())?;
 
-        self.handle
-            .httppost(form)
-            .map_err(|e| RelayError::Network {
-                message: "Failed to set form data".into(),
-                cause: Some(e.to_string()),
-            })
+        self.handle.httppost(form).map_err(|e| RelayError::Network {
+            message: "Failed to set form data".into(),
+            cause: Some(e.to_string()),
+        })
     }
 
     fn set_multipart_content(
@@ -198,7 +196,6 @@ impl<'a> ContentHandler<'a> {
     fn set_xml_content(&mut self, content: &str, media_type: &MediaType) -> Result<()> {
         self.set_text_content(content, media_type)
     }
-
 
     fn set_urlencoded_content(
         &mut self,

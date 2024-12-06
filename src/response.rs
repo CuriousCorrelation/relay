@@ -1,10 +1,10 @@
 use std::{collections::HashMap, time::SystemTime};
 
-use http::StatusCode;
+use http::{StatusCode, Version};
 
 use crate::{
     error::{RelayError, Result},
-    interop::{ContentType, MediaType, Protocol, Response, ResponseMeta, SizeInfo, TimingInfo},
+    interop::{ContentType, MediaType, Response, ResponseMeta, SizeInfo, TimingInfo},
 };
 
 pub(crate) struct ResponseHandler {
@@ -15,7 +15,7 @@ pub(crate) struct ResponseHandler {
     header_size: u64,
     start_time: SystemTime,
     end_time: SystemTime,
-    protocol: Protocol,
+    version: Version,
 }
 
 impl ResponseHandler {
@@ -27,7 +27,7 @@ impl ResponseHandler {
         header_size: u64,
         start_time: SystemTime,
         end_time: SystemTime,
-        protocol: Protocol,
+        version: Version,
     ) -> Self {
         Self {
             id,
@@ -37,7 +37,7 @@ impl ResponseHandler {
             header_size,
             start_time,
             end_time,
-            protocol,
+            version,
         }
     }
 
@@ -57,7 +57,7 @@ impl ResponseHandler {
             content_type = ?content,
             body_size = size.body,
             total_size = size.total,
-            protocol = ?self.protocol,
+            version = ?self.version,
             "Response built successfully"
         );
 
@@ -65,7 +65,7 @@ impl ResponseHandler {
             id: self.id,
             status: self.status,
             status_text: self.status.to_string(),
-            protocol: self.protocol,
+            version: self.version,
             content,
             headers: self.headers,
             cookies: None,

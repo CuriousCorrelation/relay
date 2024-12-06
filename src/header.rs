@@ -49,13 +49,14 @@ impl<'a> HeadersBuilder<'a> {
     pub(crate) fn add_content_type(&mut self, content_type: &str) -> Result<()> {
         tracing::trace!(content_type = %content_type, "Setting content type header");
         let mut list = List::new();
-        list.append(&format!("Content-Type: {}", content_type)).map_err(|e| {
-            tracing::error!(error = %e, "Failed to set content type");
-            RelayError::Network {
-                message: "Failed to set content type".into(),
-                cause: Some(e.to_string()),
-            }
-        })?;
+        list.append(&format!("Content-Type: {}", content_type))
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to set content type");
+                RelayError::Network {
+                    message: "Failed to set content type".into(),
+                    cause: Some(e.to_string()),
+                }
+            })?;
 
         self.handle.http_headers(list).map_err(|e| {
             tracing::error!(error = %e, "Failed to set content type header");
