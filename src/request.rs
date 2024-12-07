@@ -58,6 +58,16 @@ impl<'a> CurlRequest<'a> {
                 }
             })?;
 
+        // NOTE: `""` corresponds to accept all,
+        // see: https://curl.se/libcurl/c/CURLOPT_ACCEPT_ENCODING.html
+        self.handle.accept_encoding("").map_err(|e| {
+            tracing::error!(error = %e, "Failed to set accept-encoding");
+            RelayError::Network {
+                message: "Failed to set accept-encoding".into(),
+                cause: Some(e.to_string()),
+            }
+        })?;
+
         if let Some(ref headers) = self.request.headers {
             tracing::trace!(headers = ?headers, "Adding request headers");
             HeadersBuilder::new(self.handle).add_headers(Some(headers))?;
