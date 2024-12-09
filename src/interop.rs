@@ -97,8 +97,46 @@ pub enum ContentType {
     },
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TokenResponse {
+    pub access_token: String,
+    pub token_type: String,
+    pub expires_in: Option<u64>,
+    pub refresh_token: Option<String>,
+    pub scope: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
+pub enum GrantType {
+    #[serde(rename_all = "camelCase")]
+    AuthorizationCode {
+        auth_endpoint: String,
+        token_endpoint: String,
+        client_id: String,
+        client_secret: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    ClientCredentials {
+        token_endpoint: String,
+        client_id: String,
+        client_secret: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Password {
+        token_endpoint: String,
+        username: String,
+        password: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    Implicit {
+        auth_endpoint: String,
+        client_id: String,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "kind", rename_all = "lowercase")]
 pub enum AuthType {
     None,
     Basic {
@@ -119,15 +157,19 @@ pub enum AuthType {
         nc: Option<String>,
         cnonce: Option<String>,
     },
+    #[serde(rename_all = "camelCase")]
+    OAuth2 {
+        grant_type: GrantType,
+        access_token: Option<String>,
+        refresh_token: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "SCREAMING-KEBAB-CASE")]
 pub enum DigestAlgorithm {
-    #[serde(rename = "MD5")]
     Md5,
-    #[serde(rename = "SHA-256")]
     Sha256,
-    #[serde(rename = "SHA-512")]
     Sha512,
 }
 
