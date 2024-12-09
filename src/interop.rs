@@ -45,11 +45,14 @@ pub enum MediaType {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum FormValue {
     Text(String),
+    #[serde(rename_all = "camelCase")]
     File {
         filename: String,
         content_type: MediaType,
+        #[serde(with = "serde_bytes")]
         data: Vec<u8>,
     },
 }
@@ -57,42 +60,43 @@ pub enum FormValue {
 pub type FormData = HashMap<String, Vec<FormValue>>;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ContentType {
+    #[serde(rename_all = "camelCase")]
     Text {
         content: String,
-        #[serde(rename = "mediaType")]
         media_type: MediaType,
     },
+    #[serde(rename_all = "camelCase")]
     Json {
         content: serde_json::Value,
-        #[serde(rename = "mediaType")]
         media_type: MediaType,
     },
+    #[serde(rename_all = "camelCase")]
     Xml {
         content: String,
-        #[serde(rename = "mediaType")]
         media_type: MediaType,
     },
+    #[serde(rename_all = "camelCase")]
     Form {
         content: FormData,
-        #[serde(rename = "mediaType")]
         media_type: MediaType,
     },
+    #[serde(rename_all = "camelCase")]
     Binary {
+        #[serde(with = "serde_bytes")]
         content: Vec<u8>,
-        #[serde(rename = "mediaType")]
         media_type: MediaType,
         filename: Option<String>,
     },
+    #[serde(rename_all = "camelCase")]
     Multipart {
         content: FormData,
-        #[serde(rename = "mediaType")]
         media_type: MediaType,
     },
+    #[serde(rename_all = "camelCase")]
     Urlencoded {
         content: HashMap<String, String>,
-        #[serde(rename = "mediaType")]
         media_type: MediaType,
     },
 }
@@ -107,7 +111,7 @@ pub struct TokenResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum GrantType {
     #[serde(rename_all = "camelCase")]
     AuthorizationCode {
@@ -139,13 +143,16 @@ pub enum GrantType {
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum AuthType {
     None,
+    #[serde(rename_all = "camelCase")]
     Basic {
         username: String,
         password: String,
     },
+    #[serde(rename_all = "camelCase")]
     Bearer {
         token: String,
     },
+    #[serde(rename_all = "camelCase")]
     Digest {
         username: String,
         password: String,
@@ -181,10 +188,19 @@ pub enum DigestQop {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum CertificateType {
-    Pem { cert: Vec<u8>, key: Vec<u8> },
-    Pfx { data: Vec<u8>, password: String },
+    Pem {
+        #[serde(with = "serde_bytes")]
+        cert: Vec<u8>,
+        #[serde(with = "serde_bytes")]
+        key: Vec<u8>,
+    },
+    Pfx {
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
+        password: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
