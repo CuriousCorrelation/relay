@@ -19,15 +19,32 @@ impl<'a> HeadersBuilder<'a> {
         headers: Option<&HashMap<String, Vec<String>>>,
     ) -> Result<()> {
         let Some(headers) = headers else {
-            tracing::trace!("No headers to add");
+            tracing::debug!("No headers provided to add_headers");
             return Ok(());
         };
 
+        tracing::debug!(header_count = headers.len(), "Adding headers");
         let mut list = List::new();
+
         for (key, values) in headers {
+            tracing::debug!(
+                key = %key,
+                value_count = values.len(),
+                values = ?values,
+                "Processing header"
+            );
+
             for value in values {
-                list.append(&format!("{}: {}", key, value)).map_err(|e| {
-                    tracing::error!(error = %e, key = %key, "Failed to append header");
+                let header = format!("{}: {}", key, value);
+                tracing::debug!(header = %header, "Appending header");
+
+                list.append(&header).map_err(|e| {
+                    tracing::error!(
+                        error = %e,
+                        key = %key,
+                        value = %value,
+                        "Failed to append header to list"
+                    );
                     RelayError::Network {
                         message: "Failed to append header".into(),
                         cause: Some(e.to_string()),
@@ -36,8 +53,12 @@ impl<'a> HeadersBuilder<'a> {
             }
         }
 
+        tracing::debug!("Setting all headers on curl handle");
         self.handle.http_headers(list).map_err(|e| {
-            tracing::error!(error = %e, "Failed to set headers");
+            tracing::error!(
+                error = %e,
+                "Failed to set headers on curl handle"
+            );
             RelayError::Network {
                 message: "Failed to set headers".into(),
                 cause: Some(e.to_string()),
@@ -47,19 +68,31 @@ impl<'a> HeadersBuilder<'a> {
 
     #[tracing::instrument(skip(self), level = "debug")]
     pub(crate) fn add_content_type(&mut self, content_type: &str) -> Result<()> {
-        tracing::trace!(content_type = %content_type, "Setting content type header");
-        let mut list = List::new();
-        list.append(&format!("Content-Type: {}", content_type))
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to set content type");
-                RelayError::Network {
-                    message: "Failed to set content type".into(),
-                    cause: Some(e.to_string()),
-                }
-            })?;
+        tracing::debug!(content_type = %content_type, "Adding content-type header");
 
+        let mut list = List::new();
+        let header = format!("Content-Type: {}", content_type);
+
+        tracing::debug!(header = %header, "Appending content-type header");
+        list.append(&header).map_err(|e| {
+            tracing::error!(
+                error = %e,
+                content_type = %content_type,
+                "Failed to append content-type header to list"
+            );
+            RelayError::Network {
+                message: "Failed to set content type".into(),
+                cause: Some(e.to_string()),
+            }
+        })?;
+
+        tracing::debug!("Setting content-type header on curl handle");
         self.handle.http_headers(list).map_err(|e| {
-            tracing::error!(error = %e, "Failed to set content type header");
+            tracing::error!(
+                error = %e,
+                content_type = %content_type,
+                "Failed to set content-type header on curl handle"
+            );
             RelayError::Network {
                 message: "Failed to set content type header".into(),
                 cause: Some(e.to_string()),
