@@ -10,14 +10,11 @@ use crate::{
 
 pub(crate) struct ContentHandler<'a> {
     handle: &'a mut Easy,
-    original_headers: HashMap<String, Vec<String>>,
+    original_headers: HashMap<String, String>,
 }
 
 impl<'a> ContentHandler<'a> {
-    pub(crate) fn new(
-        handle: &'a mut Easy,
-        headers: Option<&HashMap<String, Vec<String>>>,
-    ) -> Self {
+    pub(crate) fn new(handle: &'a mut Easy, headers: Option<&HashMap<String, String>>) -> Self {
         tracing::debug!(
             "Creating new ContentHandler with original headers: {:?}",
             headers
@@ -28,10 +25,7 @@ impl<'a> ContentHandler<'a> {
         }
     }
 
-    fn merge_and_commit_headers(
-        &mut self,
-        new_headers: HashMap<String, Vec<String>>,
-    ) -> Result<()> {
+    fn merge_and_commit_headers(&mut self, new_headers: HashMap<String, String>) -> Result<()> {
         let mut merged = self.original_headers.clone();
         tracing::info!(
             original_headers = ?self.original_headers,
@@ -39,8 +33,8 @@ impl<'a> ContentHandler<'a> {
             "Merging headers"
         );
 
-        for (key, values) in new_headers {
-            merged.insert(key, values);
+        for (key, value) in new_headers {
+            merged.insert(key, value);
         }
 
         tracing::info!(merged_headers = ?merged, "Committing merged headers");
@@ -109,7 +103,7 @@ impl<'a> ContentHandler<'a> {
 
     fn set_text_content(&mut self, content: &str, media_type: &MediaType) -> Result<()> {
         let mut headers = HashMap::new();
-        headers.insert("Content-Type".to_string(), vec![media_type.to_string()]);
+        headers.insert("Content-Type".to_string(), media_type.to_string());
 
         self.merge_and_commit_headers(headers)?;
 
@@ -141,7 +135,7 @@ impl<'a> ContentHandler<'a> {
         })?;
 
         let mut headers = HashMap::new();
-        headers.insert("Content-Type".to_string(), vec![media_type.to_string()]);
+        headers.insert("Content-Type".to_string(), media_type.to_string());
 
         self.merge_and_commit_headers(headers)?;
 
@@ -173,13 +167,13 @@ impl<'a> ContentHandler<'a> {
                 .and_then(|n| n.to_str())
                 .unwrap_or(name);
 
-            headers.insert("Content-Type".to_string(), vec![media_type.to_string()]);
+            headers.insert("Content-Type".to_string(), media_type.to_string());
             headers.insert(
                 "Content-Disposition".to_string(),
-                vec![format!("attachment; filename=\"{}\"", safe_name)],
+                format!("attachment; filename=\"{}\"", safe_name),
             );
         } else {
-            headers.insert("Content-Type".to_string(), vec![media_type.to_string()]);
+            headers.insert("Content-Type".to_string(), media_type.to_string());
         }
 
         self.merge_and_commit_headers(headers)?;
@@ -202,7 +196,7 @@ impl<'a> ContentHandler<'a> {
         media_type: &MediaType,
     ) -> Result<()> {
         let mut headers = HashMap::new();
-        headers.insert("Content-Type".to_string(), vec![media_type.to_string()]);
+        headers.insert("Content-Type".to_string(), media_type.to_string());
 
         self.merge_and_commit_headers(headers)?;
 
@@ -286,7 +280,7 @@ impl<'a> ContentHandler<'a> {
         media_type: &MediaType,
     ) -> Result<()> {
         let mut headers = HashMap::new();
-        headers.insert("Content-Type".to_string(), vec![media_type.to_string()]);
+        headers.insert("Content-Type".to_string(), media_type.to_string());
 
         self.merge_and_commit_headers(headers)?;
 

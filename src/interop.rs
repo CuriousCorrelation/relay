@@ -218,8 +218,8 @@ pub struct Request {
     pub method: Method,
     #[serde(with = "http_serde::version")]
     pub version: Version,
-    pub headers: Option<HashMap<String, Vec<String>>>,
-    pub params: Option<HashMap<String, Vec<String>>>,
+    pub headers: Option<HashMap<String, String>>,
+    pub params: Option<HashMap<String, String>>,
     pub content: Option<ContentType>,
     pub auth: Option<AuthType>,
     pub security: Option<SecurityConfig>,
@@ -227,10 +227,12 @@ pub struct Request {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ResponseBody {
     pub body: Bytes,
     pub media_type: MediaType,
 }
+
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Response {
@@ -241,7 +243,7 @@ pub struct Response {
     pub status_text: String,
     #[serde(with = "http_serde::version")]
     pub version: Version,
-    pub headers: HashMap<String, Vec<String>>,
+    pub headers: HashMap<String, String>,
     pub cookies: Option<Vec<Cookie>>,
     pub body: ResponseBody,
     pub meta: ResponseMeta,

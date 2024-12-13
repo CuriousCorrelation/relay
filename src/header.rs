@@ -13,10 +13,11 @@ impl<'a> HeadersBuilder<'a> {
         Self { handle }
     }
 
+
     #[tracing::instrument(skip(self), level = "debug")]
     pub(crate) fn add_headers(
         &mut self,
-        headers: Option<&HashMap<String, Vec<String>>>,
+        headers: Option<&HashMap<String, String>>,
     ) -> Result<()> {
         let Some(headers) = headers else {
             tracing::debug!("No headers provided");
@@ -28,14 +29,14 @@ impl<'a> HeadersBuilder<'a> {
 
         let list = headers
             .iter()
-            .map(|(key, values)| {
+            .map(|(key, value)| {
                 tracing::debug!(
                     ?key,
-                    value_count = values.len(),
-                    ?values,
+                    value_count = value.len(),
+                    ?value,
                     "Processing headers"
                 );
-                let header = format!("{key}: {}", values.join(", "));
+                let header = format!("{key}: {value}");
                 tracing::debug!(%header, "Adding header");
                 header
             })
@@ -63,7 +64,7 @@ impl<'a> HeadersBuilder<'a> {
     pub(crate) fn add_content_type(&mut self, content_type: &str) -> Result<()> {
         tracing::info!(content_type = %content_type, "Adding content-type header");
         let mut headers = HashMap::new();
-        headers.insert("Content-Type".to_string(), vec![content_type.to_string()]);
+        headers.insert("Content-Type".to_string(), content_type.to_string());
         self.add_headers(Some(&headers))
     }
 }

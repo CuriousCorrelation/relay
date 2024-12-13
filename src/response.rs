@@ -3,6 +3,7 @@ use std::{collections::HashMap, time::SystemTime};
 use bytes::Bytes;
 use http::{StatusCode, Version};
 
+
 use crate::{
     error::{RelayError, Result},
     interop::{MediaType, Response, ResponseBody, ResponseMeta, SizeInfo, TimingInfo},
@@ -10,7 +11,7 @@ use crate::{
 
 pub(crate) struct ResponseHandler {
     id: i64,
-    headers: HashMap<String, Vec<String>>,
+    headers: HashMap<String, String>,
     body: Bytes,
     status: StatusCode,
     header_size: u64,
@@ -22,7 +23,7 @@ pub(crate) struct ResponseHandler {
 impl ResponseHandler {
     pub(crate) fn new(
         id: i64,
-        headers: HashMap<String, Vec<String>>,
+        headers: HashMap<String, String>,
         body: Bytes,
         status: StatusCode,
         header_size: u64,
@@ -84,7 +85,6 @@ impl ResponseHandler {
 
         self.headers
             .get("Content-Type")
-            .and_then(|t| t.first())
             .map(|content_type| {
                 if content_type.starts_with(MediaType::TextPlain.as_ref()) {
                     MediaType::TextPlain

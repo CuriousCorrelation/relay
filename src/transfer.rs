@@ -8,7 +8,7 @@ use crate::error::{RelayError, Result};
 
 pub(crate) struct TransferHandler {
     body: BytesMut,
-    headers: HashMap<String, Vec<String>>,
+    headers: HashMap<String, String>,
 }
 
 impl TransferHandler {
@@ -50,10 +50,10 @@ impl TransferHandler {
                 if let Ok(header_str) = String::from_utf8(header.to_vec()) {
                     if let Some(idx) = header_str.find(':') {
                         let (key, value) = header_str.split_at(idx);
-                        let key = key.trim().to_string();
+                        let key = key.trim().to_uppercase();
                         let value = value[1..].trim().to_string();
 
-                        headers.entry(key).or_insert_with(Vec::new).push(value);
+                        headers.entry(key).or_insert(value);
                     }
                 }
                 true
@@ -95,7 +95,7 @@ impl TransferHandler {
         Ok(())
     }
 
-    pub(crate) fn into_parts(self) -> (Bytes, HashMap<String, Vec<String>>) {
+    pub(crate) fn into_parts(self) -> (Bytes, HashMap<String, String>) {
         (self.body.into(), self.headers)
     }
 }

@@ -10,7 +10,7 @@ use crate::{
 
 pub(crate) struct AuthHandler<'a> {
     handle: &'a mut Easy,
-    headers: HashMap<String, Vec<String>>,
+    headers: HashMap<String, String>,
 }
 
 impl<'a> AuthHandler<'a> {
@@ -90,10 +90,8 @@ impl<'a> AuthHandler<'a> {
     }
 
     fn set_bearer_auth(&mut self, token: &str) -> Result<()> {
-        self.headers.insert(
-            "Authorization".to_string(),
-            vec![format!("Bearer {}", token)],
-        );
+        self.headers
+            .insert("Authorization".to_string(), format!("Bearer {}", token));
         self.commit_headers()
     }
 
