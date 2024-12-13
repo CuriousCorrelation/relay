@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use curl::easy::Easy;
 
 use openssl::pkcs12::Pkcs12;
@@ -22,28 +23,24 @@ impl<'a> SecurityHandler<'a> {
 
         if let Some(validate) = security.validate_certificates {
             tracing::debug!(validate = validate, "Setting SSL verify peer");
-            self.handle
-                .ssl_verify_peer(validate)
-                .map_err(|e| {
-                    tracing::error!(error = %e, "Failed to set SSL verify peer");
-                    RelayError::Certificate {
-                        message: "Failed to set SSL verify peer".into(),
-                        cause: Some(e.to_string()),
-                    }
-                })?;
+            self.handle.ssl_verify_peer(validate).map_err(|e| {
+                tracing::error!(error = %e, "Failed to set SSL verify peer");
+                RelayError::Certificate {
+                    message: "Failed to set SSL verify peer".into(),
+                    cause: Some(e.to_string()),
+                }
+            })?;
         }
 
         if let Some(verify) = security.verify_host {
             tracing::debug!(verify = verify, "Setting SSL verify host");
-            self.handle
-                .ssl_verify_host(verify)
-                .map_err(|e| {
-                    tracing::error!(error = %e, "Failed to set SSL verify host");
-                    RelayError::Certificate {
-                        message: "Failed to set SSL verify host".into(),
-                        cause: Some(e.to_string()),
-                    }
-                })?;
+            self.handle.ssl_verify_host(verify).map_err(|e| {
+                tracing::error!(error = %e, "Failed to set SSL verify host");
+                RelayError::Certificate {
+                    message: "Failed to set SSL verify host".into(),
+                    cause: Some(e.to_string()),
+                }
+            })?;
         }
 
         if let Some(ref certs) = security.certificates {
@@ -160,7 +157,7 @@ impl<'a> SecurityHandler<'a> {
         }
     }
 
-    fn configure_ca_certificates(&mut self, ca_certs: &[Vec<u8>]) -> Result<()> {
+    fn configure_ca_certificates(&mut self, ca_certs: &[Bytes]) -> Result<()> {
         for (index, cert) in ca_certs.iter().enumerate() {
             tracing::debug!(cert_index = index, "Setting CA certificate");
             self.handle.ssl_cainfo_blob(cert).map_err(|e| {
