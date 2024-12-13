@@ -19,48 +19,41 @@ impl<'a> HeadersBuilder<'a> {
         headers: Option<&HashMap<String, Vec<String>>>,
     ) -> Result<()> {
         let Some(headers) = headers else {
-            tracing::debug!("No headers provided to add_headers");
+            tracing::debug!("No headers provided");
             return Ok(());
         };
 
-        tracing::info!(
-            header_count = headers.len(),
-            "Building complete header list"
-        );
-        let mut list = List::new();
+        let header_count = headers.len();
+        tracing::info!(header_count, "Building header list");
 
-        for (key, values) in headers {
-            tracing::debug!(
-                key = %key,
-                value_count = values.len(),
-                values = ?values,
-                "Processing header group"
-            );
-
-            for value in values {
-                let header = format!("{}: {}", key, value);
-                tracing::debug!(header = %header, "Adding header to list");
-
+        let list = headers
+            .iter()
+            .map(|(key, values)| {
+                tracing::debug!(
+                    ?key,
+                    value_count = values.len(),
+                    ?values,
+                    "Processing headers"
+                );
+                let header = format!("{key}: {}", values.join(", "));
+                tracing::debug!(%header, "Adding header");
+                header
+            })
+            .try_fold(List::new(), |mut list, header| {
                 list.append(&header).map_err(|e| {
-                    tracing::error!(
-                        error = %e,
-                        key = %key,
-                        value = %value,
-                        "Failed to append header to list"
-                    );
+                    tracing::error!(%e, "Failed to append header: {header}");
                     RelayError::Network {
-                        message: format!("Failed to append header {}: {}", key, value),
+                        message: format!("Failed to append header: {header}"),
                         cause: Some(e.to_string()),
                     }
                 })?;
-            }
-        }
+                Ok(list)
+            })?;
 
-        tracing::info!("Setting complete header list on curl handle");
         self.handle.http_headers(list).map_err(|e| {
-            tracing::error!(error = %e, "Failed to set complete header list");
+            tracing::error!(%e, "Failed to set headers");
             RelayError::Network {
-                message: "Failed to set complete headers".into(),
+                message: "Failed to set headers".into(),
                 cause: Some(e.to_string()),
             }
         })
