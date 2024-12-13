@@ -40,8 +40,8 @@ pub enum MediaType {
     #[serde(rename = "application/octet-stream")]
     #[strum(to_string = "application/octet-stream")]
     OctetStream,
-    #[serde(other)]
-    Other,
+    #[serde(untagged)]
+    Other(String),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
