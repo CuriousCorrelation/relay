@@ -2,7 +2,7 @@ use std::{collections::HashMap, time::SystemTime};
 
 use bytes::Bytes;
 use http::{StatusCode, Version};
-
+use mime::Mime;
 
 use crate::{
     error::{RelayError, Result},
@@ -85,32 +85,20 @@ impl ResponseHandler {
 
         self.headers
             .get("Content-Type")
-            .map(|content_type| {
-                if content_type.starts_with(MediaType::TextPlain.as_ref()) {
-                    MediaType::TextPlain
-                } else if content_type.starts_with(MediaType::TextHtml.as_ref()) {
-                    MediaType::TextHtml
-                } else if content_type.starts_with(MediaType::TextCss.as_ref()) {
-                    MediaType::TextCss
-                } else if content_type.starts_with(MediaType::TextCsv.as_ref()) {
-                    MediaType::TextCsv
-                } else if content_type.starts_with(MediaType::Json.as_ref()) {
-                    MediaType::Json
-                } else if content_type.starts_with(MediaType::JsonLd.as_ref()) {
-                    MediaType::JsonLd
-                } else if content_type.starts_with(MediaType::Xml.as_ref()) {
-                    MediaType::Xml
-                } else if content_type.starts_with(MediaType::TextXml.as_ref()) {
-                    MediaType::TextXml
-                } else if content_type.starts_with(MediaType::FormUrlEncoded.as_ref()) {
-                    MediaType::FormUrlEncoded
-                } else if content_type.starts_with(MediaType::MultipartFormData.as_ref()) {
-                    MediaType::MultipartFormData
-                } else if content_type.starts_with(MediaType::OctetStream.as_ref()) {
-                    MediaType::OctetStream
-                } else {
-                    MediaType::TextPlain
-                }
+            .and_then(|content_type| content_type.parse::<Mime>().ok())
+            .map(|mime| match (mime.type_(), mime.subtype()) {
+                (mime::APPLICATION, mime::JSON) => MediaType::Json,
+                (mime::APPLICATION, name) if name == "ld+json" => MediaType::JsonLd,
+                (mime::APPLICATION, mime::XML) => MediaType::Xml,
+                (mime::APPLICATION, mime::WWW_FORM_URLENCODED) => MediaType::FormUrlEncoded,
+                (mime::APPLICATION, mime::OCTET_STREAM) => MediaType::OctetStream,
+                (mime::TEXT, mime::PLAIN) => MediaType::TextPlain,
+                (mime::TEXT, mime::HTML) => MediaType::TextHtml,
+                (mime::TEXT, mime::CSS) => MediaType::TextCss,
+                (mime::TEXT, mime::CSV) => MediaType::TextCsv,
+                (mime::TEXT, mime::XML) => MediaType::TextXml,
+                (mime::MULTIPART, name) if name == "form-data" => MediaType::MultipartFormData,
+                _ => MediaType::TextPlain,
             })
             .unwrap_or(MediaType::TextPlain)
     }

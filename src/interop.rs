@@ -233,7 +233,6 @@ pub struct ResponseBody {
     pub media_type: MediaType,
 }
 
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Response {
     pub id: i64,

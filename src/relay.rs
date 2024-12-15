@@ -6,7 +6,6 @@ use std::{
     time::SystemTime,
 };
 
-
 use curl::easy::Easy;
 use dashmap::DashMap;
 use http::StatusCode;

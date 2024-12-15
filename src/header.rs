@@ -13,12 +13,8 @@ impl<'a> HeadersBuilder<'a> {
         Self { handle }
     }
 
-
     #[tracing::instrument(skip(self), level = "debug")]
-    pub(crate) fn add_headers(
-        &mut self,
-        headers: Option<&HashMap<String, String>>,
-    ) -> Result<()> {
+    pub(crate) fn add_headers(&mut self, headers: Option<&HashMap<String, String>>) -> Result<()> {
         let Some(headers) = headers else {
             tracing::debug!("No headers provided");
             return Ok(());

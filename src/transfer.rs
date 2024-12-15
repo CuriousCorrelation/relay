@@ -50,7 +50,7 @@ impl TransferHandler {
                 if let Ok(header_str) = String::from_utf8(header.to_vec()) {
                     if let Some(idx) = header_str.find(':') {
                         let (key, value) = header_str.split_at(idx);
-                        let key = key.trim().to_uppercase();
+                        let key = key.trim().to_string();
                         let value = value[1..].trim().to_string();
 
                         headers.entry(key).or_insert(value);
