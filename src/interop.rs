@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use http::{Method, StatusCode, Version};
 use serde::{Deserialize, Serialize};
-use strum::{AsRefStr, Display};
+use strum::{Display, EnumString};
 use time::OffsetDateTime;
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Display, AsRefStr)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Display, EnumString)]
 pub enum MediaType {
     #[serde(rename = "text/plain")]
     #[strum(to_string = "text/plain")]

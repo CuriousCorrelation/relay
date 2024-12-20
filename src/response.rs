@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::SystemTime};
+use std::{collections::HashMap, str::FromStr, time::SystemTime};
 
 use bytes::Bytes;
 use http::{StatusCode, Version};
@@ -86,20 +86,25 @@ impl ResponseHandler {
         self.headers
             .get("Content-Type")
             .and_then(|content_type| content_type.parse::<Mime>().ok())
-            .map(|mime| match (mime.type_(), mime.subtype()) {
-                (mime::APPLICATION, mime::JSON) => MediaType::Json,
-                (mime::APPLICATION, name) if name == "ld+json" => MediaType::JsonLd,
-                (mime::APPLICATION, mime::XML) => MediaType::Xml,
-                (mime::APPLICATION, mime::WWW_FORM_URLENCODED) => MediaType::FormUrlEncoded,
-                (mime::APPLICATION, mime::OCTET_STREAM) => MediaType::OctetStream,
-                (mime::TEXT, mime::PLAIN) => MediaType::TextPlain,
-                (mime::TEXT, mime::HTML) => MediaType::TextHtml,
-                (mime::TEXT, mime::CSS) => MediaType::TextCss,
-                (mime::TEXT, mime::CSV) => MediaType::TextCsv,
-                (mime::TEXT, mime::XML) => MediaType::TextXml,
-                (mime::MULTIPART, name) if name == "form-data" => MediaType::MultipartFormData,
-                _ => MediaType::TextPlain,
+            .and_then(|mime| match (mime.type_(), mime.subtype()) {
+                (mime::APPLICATION, mime::JSON) => Some(MediaType::Json),
+                (mime::APPLICATION, name) if name == "ld+json" => Some(MediaType::JsonLd),
+                (mime::APPLICATION, mime::XML) => Some(MediaType::Xml),
+                (mime::APPLICATION, mime::WWW_FORM_URLENCODED) => Some(MediaType::FormUrlEncoded),
+                (mime::APPLICATION, mime::OCTET_STREAM) => Some(MediaType::OctetStream),
+                (mime::TEXT, mime::PLAIN) => Some(MediaType::TextPlain),
+                (mime::TEXT, mime::HTML) => Some(MediaType::TextHtml),
+                (mime::TEXT, mime::CSS) => Some(MediaType::TextCss),
+                (mime::TEXT, mime::CSV) => Some(MediaType::TextCsv),
+                (mime::TEXT, mime::XML) => Some(MediaType::TextXml),
+                (mime::MULTIPART, name) if name == "form-data" => {
+                    Some(MediaType::MultipartFormData)
+                }
+                _ => None,
             })
+            .or(infer::get(&self.body)
+                .map(|kind| MediaType::from_str(kind.mime_type()).ok())
+                .flatten())
             .unwrap_or(MediaType::TextPlain)
     }
 
