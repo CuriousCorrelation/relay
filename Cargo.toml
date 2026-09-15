@@ -6,12 +6,12 @@ authors = ["CuriousCorrelation"]
 edition = "2021"
 
 [dependencies]
-curl = { git = "https://github.com/CuriousCorrelation/curl-rust.git", rev = "1ec8079cf527b9cf47cc7a48c68b458affdae273", features = ["ntlm"] }
+curl = { git = "https://github.com/CuriousCorrelation/curl-rust.git", rev = "025ff84f77e1fee37b4dca3cf39b724f4efcc87d", features = ["ntlm"] }
 # NOTE: Pinned to the same rev as `curl`, so
 #       `curl_sys::certs::get_cert_content()` returns the
 #       Mozilla-derived bundle compiled into that build, which
 #       `trust.rs` uses when a platform's host store has no anchors.
-curl-sys = { git = "https://github.com/CuriousCorrelation/curl-rust.git", rev = "1ec8079cf527b9cf47cc7a48c68b458affdae273" }
+curl-sys = { git = "https://github.com/CuriousCorrelation/curl-rust.git", rev = "025ff84f77e1fee37b4dca3cf39b724f4efcc87d" }
 cookie = "0.18"
 tokio-util = "0.7.12"
 lazy_static = "1.5.0"
