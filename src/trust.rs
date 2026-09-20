@@ -193,9 +193,12 @@ fn pem_encode(ders: &[Vec<u8>]) -> (Vec<u8>, usize) {
 }
 
 /// True where the bytes parse as at least one PEM certificate, which is
-/// how a user entry is checked before it is added to the combined blob.
+/// how a user entry is checked before it is added to the combined blob. The
+/// check is the lenient one the host store reads with, ∵ a bundle whose last
+/// block is corrupt still carries the CAs before it, and rejecting the entry
+/// would drop them all.
 pub(crate) fn parses_as_pem(pem: &[u8]) -> bool {
-    X509::stack_from_pem(pem).map(|s| !s.is_empty()).unwrap_or(false)
+    !parse_lenient(pem).is_empty()
 }
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -683,6 +686,18 @@ mod tests {
         let (pem, encoded) = pem_encode(&[der.clone(), b"not a certificate".to_vec()]);
         assert_eq!(encoded, 1);
         assert_eq!(parse_lenient(&pem), vec![der]);
+    }
+
+    // A user entry is checked with the same lenient parser the host store is
+    // read with, so a bundle whose last block is corrupt keeps the CAs before
+    // it instead of being rejected whole.
+    #[test]
+    fn a_bundle_with_one_corrupt_block_still_parses_as_pem() {
+        let (pem, _) = pem_encode(&[root("good", &key(), None)]);
+        let mut mixed = pem.clone();
+        mixed.extend_from_slice(b"-----BEGIN CERTIFICATE-----\ntruncated\n-----END CERTIFICATE-----\n");
+        assert!(parses_as_pem(&mixed));
+        assert!(!parses_as_pem(b"not a certificate"));
     }
 
     #[test]
