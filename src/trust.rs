@@ -32,9 +32,15 @@ const XKU_ANYEKU: u32 = 0x100;
     not(any(target_os = "macos", target_os = "windows")),
     allow(dead_code)
 )]
+const XKU_SGC: u32 = 0x10;
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows")),
+    allow(dead_code)
+)]
 const EXFLAG_XKUSAGE: u32 = 0x4;
 
 const PEM_HEADER: &[u8] = b"-----BEGIN CERTIFICATE-----";
+const PEM_FOOTER: &[u8] = b"-----END CERTIFICATE-----";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -69,17 +75,39 @@ pub(crate) struct TrustBundle {
 /// remove the public roots curl had already set on the handle.
 pub(crate) fn load() -> TrustBundle {
     match read_platform() {
-        Some(bundle) if parsed_anchors(&bundle.pem) > 0 => bundle,
+        Some(bundle) if !parse_lenient(&bundle.pem).is_empty() => bundle,
         _ => bundled(),
     }
 }
 
-/// Certificates OpenSSL can parse out of a PEM blob. A probed file that exists
-/// and holds comments, HTML from a captive portal, or a truncated write parses
-/// to none of them, and curl would then verify every public endpoint against
-/// an empty anchor set.
-fn parsed_anchors(pem: &[u8]) -> usize {
-    X509::stack_from_pem(pem).map(|s| s.len()).unwrap_or(0)
+/// Certificates OpenSSL can parse out of a PEM blob, block by block, since
+/// `X509::stack_from_pem` discards every certificate it had already parsed
+/// when it meets a malformed one, and a `ca-certificates.crt` with a single
+/// bad entry among a hundred good ones is more likely than a file that holds
+/// nothing parseable at all.
+fn parse_lenient(pem: &[u8]) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut rest = pem;
+    while let Some(start) = find(rest, PEM_HEADER) {
+        let block = &rest[start..];
+        let end = match find(block, PEM_FOOTER) {
+            Some(e) => e + PEM_FOOTER.len(),
+            None => break,
+        };
+        if let Ok(cert) = X509::from_pem(&block[..end]) {
+            if let Ok(der) = cert.to_der() {
+                out.push(der);
+            }
+        }
+        rest = &block[end..];
+    }
+    out
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn bundled() -> TrustBundle {
@@ -118,32 +146,22 @@ fn valid_for_tls(der: &[u8]) -> bool {
         if openssl_sys::X509_get_extension_flags(ptr) & EXFLAG_XKUSAGE == 0 {
             return true;
         }
-        openssl_sys::X509_get_extended_key_usage(ptr) & (XKU_SSL_SERVER | XKU_ANYEKU) != 0
+        openssl_sys::X509_get_extended_key_usage(ptr) & (XKU_SSL_SERVER | XKU_ANYEKU | XKU_SGC) != 0
     }
 }
 
-#[cfg_attr(
-    not(any(target_os = "macos", target_os = "windows")),
-    allow(dead_code)
-)]
-fn public_key_id(der: &[u8]) -> Option<Vec<u8>> {
-    let cert = X509::from_der(der).ok()?;
-    cert.public_key().ok()?.public_key_to_der().ok()
-}
-
-/// Keyed on public key, since the same anchor is cross-signed and reissued
-/// under different serials and appears in a store export and in the bundle as
-/// different byte strings.
-#[cfg_attr(
-    not(any(target_os = "macos", target_os = "windows")),
-    allow(dead_code)
-)]
-fn dedup_by_public_key(ders: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+/// Keyed on the encoded certificate, since two roots can share a public key
+/// and differ in subject or validity. `CN=Apple Root CA` and the expired
+/// `CN=Apple Root Certificate Authority` share one key in the macOS System
+/// domain, and an ADCS root renewal reuses its key by default, so keying on
+/// the key would let enumeration order decide which of a live root and a dead
+/// one reaches the blob. OpenSSL matches an anchor by issuer name, so both
+/// have to be present.
+fn dedup_exact(ders: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
     let mut seen: HashSet<Vec<u8>> = HashSet::new();
     let mut out = Vec::with_capacity(ders.len());
     for der in ders {
-        let key = public_key_id(&der).unwrap_or_else(|| der.clone());
-        if seen.insert(key) {
+        if seen.insert(der.clone()) {
             out.push(der);
         }
     }
@@ -154,17 +172,24 @@ fn dedup_by_public_key(ders: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
     not(any(target_os = "macos", target_os = "windows")),
     allow(dead_code)
 )]
-fn pem_encode(ders: &[Vec<u8>]) -> Vec<u8> {
+/// The PEM blob and the anchors it holds, which is what the trust source line
+/// reports, since an anchor that fails re-encoding is absent from the blob and
+/// counting before this point would overstate what curl received.
+fn pem_encode(ders: &[Vec<u8>]) -> (Vec<u8>, usize) {
     let mut out = Vec::new();
+    let mut encoded = 0usize;
     for der in ders {
         if let Ok(pem) = X509::from_der(der).and_then(|cert| cert.to_pem()) {
             out.extend_from_slice(&pem);
             if !out.ends_with(b"\n") {
                 out.push(b'\n');
             }
+            encoded += 1;
+        } else {
+            tracing::debug!("Anchor dropped, it does not re-encode as PEM");
         }
     }
-    out
+    (out, encoded)
 }
 
 /// True where the bytes parse as at least one PEM certificate, which is
@@ -217,6 +242,7 @@ fn read_platform() -> Option<TrustBundle> {
 
     let mut entries: Vec<(Vec<u8>, Vec<u8>, Decision)> = Vec::new();
     let mut read = 0usize;
+    let mut system_read = false;
 
     // User settings override Admin settings, which override what the System
     // domain ships, so the domains are read in that order and the first
@@ -224,13 +250,15 @@ fn read_platform() -> Option<TrustBundle> {
     for domain in [Domain::User, Domain::Admin, Domain::System] {
         let settings = TrustSettings::new(domain);
         let Ok(certificates) = settings.iter() else {
-            tracing::debug!(domain = ?domain, "Trust domain unreadable");
+            tracing::warn!(domain = ?domain, "Trust domain unreadable");
             continue;
         };
+        if matches!(domain, Domain::System) {
+            system_read = true;
+        }
         for cert in certificates {
             read += 1;
             let der = cert.to_der();
-            let key = public_key_id(&der).unwrap_or_else(|| der.clone());
             let decision = match settings.tls_trust_settings_for_certificate(&cert) {
                 // An administrator's explicit SSL trust setting is taken
                 // without the extended key usage check, since the
@@ -249,25 +277,42 @@ fn read_platform() -> Option<TrustBundle> {
                     }
                 }
                 Ok(_) => Decision::Defer,
+                // A read that fails on a certificate an administrator or the
+                // user installed keeps it, ∵ deferring drops a corporate root
+                // that no lower domain lists, and the call is a live keychain
+                // read that fails transiently.
                 Err(e) => {
-                    tracing::debug!(error = %e, "Trust settings read failed");
-                    Decision::Defer
+                    tracing::warn!(error = %e, domain = ?domain, "Trust settings read failed");
+                    if matches!(domain, Domain::System) {
+                        Decision::Defer
+                    } else {
+                        Decision::Trust
+                    }
                 }
             };
-            entries.push((key, der, decision));
+            entries.push((der.clone(), der, decision));
         }
     }
 
-    let ders = resolve_by_precedence(entries);
+    let mut ders = resolve_by_precedence(entries);
     if ders.is_empty() {
         return None;
     }
+    // A System domain that failed to open leaves the public roots out, and a
+    // blob of locally installed roots alone would fail every public endpoint,
+    // so the compiled-in set stands in for the domain that went unread.
+    if !system_read {
+        tracing::warn!("System trust domain unread, extending with the bundled roots");
+        ders.extend(parse_lenient(curl_sys::certs::get_cert_content().as_bytes()));
+    }
 
+    let ders = dedup_exact(ders);
+    let (pem, retained) = pem_encode(&ders);
     Some(TrustBundle {
         source: TrustSource::MacosKeychain,
-        pem: pem_encode(&ders),
+        pem,
         read,
-        retained: ders.len(),
+        retained,
     })
 }
 
@@ -275,6 +320,7 @@ fn read_platform() -> Option<TrustBundle> {
 fn read_platform() -> Option<TrustBundle> {
     use std::ptr;
 
+    use windows_sys::Win32::Foundation::{GetLastError, CRYPT_E_NOT_FOUND};
     use windows_sys::Win32::Security::Cryptography::{
         CertCloseStore, CertEnumCertificatesInStore, CertOpenStore, CERT_CONTEXT,
         CERT_STORE_OPEN_EXISTING_FLAG, CERT_STORE_PROV_SYSTEM_W, CERT_STORE_READONLY_FLAG,
@@ -302,88 +348,130 @@ fn read_platform() -> Option<TrustBundle> {
             "LocalMachineEnterprise",
         ),
     ];
-    // `ROOT` alone. Every certificate in a `CURLOPT_CAINFO_BLOB` is a trust
-    // anchor, and the `CA` store holds intermediates that Windows chains
-    // through a root, so exporting it would let an intermediate anchor a
-    // chain that SChannel would reject.
-    const NAMES: &[&str] = &["ROOT"];
 
-    let mut ders: Vec<Vec<u8>> = Vec::new();
-    let mut read = 0usize;
-
-    for (flag, label) in LOCATIONS {
-        for name in NAMES {
-            let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
-            let store = unsafe {
-                CertOpenStore(
-                    CERT_STORE_PROV_SYSTEM_W,
-                    0,
-                    0,
-                    flag | CERT_STORE_READONLY_FLAG | CERT_STORE_OPEN_EXISTING_FLAG,
-                    wide.as_ptr() as *const _,
-                )
-            };
-            if store.is_null() {
-                tracing::debug!(store = %format!("{label}/{name}"), "Certificate store absent");
-                continue;
-            }
-            let mut ctx: *const CERT_CONTEXT = ptr::null();
-            loop {
-                ctx = unsafe { CertEnumCertificatesInStore(store, ctx) };
-                if ctx.is_null() {
-                    break;
+    // Every certificate in a `CURLOPT_CAINFO_BLOB` is a trust anchor, and the
+    // `CA` store holds intermediates that Windows chains through a root, so
+    // anchors come from `ROOT` and `Disallowed` says which of them an
+    // administrator has revoked.
+    fn read_store(flag: u32, label: &str, name: &str) -> Option<Vec<Vec<u8>>> {
+        let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+        let store = unsafe {
+            CertOpenStore(
+                CERT_STORE_PROV_SYSTEM_W,
+                0,
+                0,
+                flag | CERT_STORE_READONLY_FLAG | CERT_STORE_OPEN_EXISTING_FLAG,
+                wide.as_ptr() as *const _,
+            )
+        };
+        if store.is_null() {
+            tracing::debug!(store = %format!("{label}/{name}"), "Certificate store absent");
+            return None;
+        }
+        let mut ders = Vec::new();
+        let mut ctx: *const CERT_CONTEXT = ptr::null();
+        let mut complete = false;
+        loop {
+            ctx = unsafe { CertEnumCertificatesInStore(store, ctx) };
+            if ctx.is_null() {
+                // The API returns null both at the end of the store and on a
+                // failure, and only `CRYPT_E_NOT_FOUND` means the store was
+                // read to its end.
+                complete = unsafe { GetLastError() } as i32 == CRYPT_E_NOT_FOUND;
+                if !complete {
+                    tracing::warn!(
+                        store = %format!("{label}/{name}"),
+                        "Certificate store enumeration failed partway"
+                    );
                 }
-                read += 1;
-                ders.push(
-                    unsafe {
-                        std::slice::from_raw_parts(
-                            (*ctx).pbCertEncoded,
-                            (*ctx).cbCertEncoded as usize,
-                        )
-                    }
-                    .to_vec(),
-                );
+                break;
             }
-            // Closed on the enumeration's only exit, so every store that opens
-            // is released exactly once.
-            unsafe { CertCloseStore(store, 0) };
+            ders.push(
+                unsafe {
+                    std::slice::from_raw_parts((*ctx).pbCertEncoded, (*ctx).cbCertEncoded as usize)
+                }
+                .to_vec(),
+            );
+        }
+        // Closed on the enumeration's only exit, so every store that opens is
+        // released exactly once.
+        unsafe { CertCloseStore(store, 0) };
+        complete.then_some(ders)
+    }
+
+    let mut roots: Vec<Vec<u8>> = Vec::new();
+    let mut revoked: Vec<Vec<u8>> = Vec::new();
+    let mut read = 0usize;
+    for (flag, label) in LOCATIONS {
+        if let Some(ders) = read_store(*flag, label, "ROOT") {
+            read += ders.len();
+            roots.extend(ders);
+        }
+        if let Some(ders) = read_store(*flag, label, "Disallowed") {
+            revoked.extend(ders);
         }
     }
+
+    // A root Windows restricts to code signing or timestamping through its
+    // store entry is still a TLS anchor once it is in the blob, and the
+    // extension is the only constraint a PEM export can express.
+    roots.retain(|der| valid_for_tls(der));
+    roots.retain(|der| !revoked.contains(der));
 
     // Windows fills `ROOT` on demand, so the store has only the roots this
     // machine has already needed, and the Automatic Root Certificates Update
     // component downloads the rest from Windows Update during verification. An
-    // export cannot trigger that download, and where the component never
-    // executes, under `DisableRootAutoUpdate`, on Server Core, or on a host
-    // with no Windows Update access, the export has a handful of anchors, so
-    // the bundle is unioned with the store, where the bundle supplies the
-    // public CAs the store is missing and the store supplies the enterprise CAs
-    // only this machine has.
-    ders.extend(pem_to_ders(curl_sys::certs::get_cert_content().as_bytes()));
+    // export cannot trigger that download, so the bundle supplies the public
+    // CAs the store is missing, minus anything `Disallowed` names.
+    let mut bundled = parse_lenient(curl_sys::certs::get_cert_content().as_bytes());
+    bundled.retain(|der| !revoked.contains(der));
+    roots.extend(bundled);
 
-    let ders = dedup_by_public_key(ders);
+    let ders = dedup_exact(roots);
     if ders.is_empty() {
         return None;
     }
 
+    let (pem, retained) = pem_encode(&ders);
     Some(TrustBundle {
         source: TrustSource::WindowsStores,
-        pem: pem_encode(&ders),
+        pem,
         read,
-        retained: ders.len(),
+        retained,
     })
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn read_platform() -> Option<TrustBundle> {
-    let path = openssl_probe::probe().cert_file?;
-    let pem = std::fs::read(&path).ok()?;
-    let count = count_anchors(&pem);
+    let probe = openssl_probe::probe();
+    let mut ders = Vec::new();
+
+    if let Some(path) = probe.cert_file.as_ref() {
+        ders.extend(parse_lenient(&std::fs::read(path).unwrap_or_default()));
+    }
+    // `probe` reports a file and a directory independently, and a host that
+    // keeps its anchors as one file per CA answers with the directory alone,
+    // where the enterprise CA an administrator dropped in is the reason to
+    // read it.
+    if let Some(dir) = probe.cert_dir.as_ref() {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                ders.extend(parse_lenient(&std::fs::read(entry.path()).unwrap_or_default()));
+            }
+        }
+    }
+
+    let ders = dedup_exact(ders);
+    if ders.is_empty() {
+        return None;
+    }
+
+    let (pem, retained) = pem_encode(&ders);
     Some(TrustBundle {
         source: TrustSource::OpensslProbe,
         pem,
-        read: count,
-        retained: count,
+        read: ders.len(),
+        retained,
     })
 }
 
@@ -486,34 +574,65 @@ mod tests {
         assert!(!valid_for_tls(b"not a certificate"));
     }
 
+    // `CN=Apple Root CA` and the expired `CN=Apple Root Certificate Authority`
+    // share a public key in the macOS System domain, so keying identity on the
+    // key would let enumeration order decide which one anchors a chain.
     #[test]
-    fn anchors_sharing_a_public_key_appear_once() {
+    fn two_roots_sharing_a_public_key_are_both_kept() {
         let shared = key();
         let first = root("first", &shared, None);
         let reissued = root("second", &shared, None);
         assert_ne!(first, reissued);
-        assert_eq!(dedup_by_public_key(vec![first.clone(), reissued]).len(), 1);
         assert_eq!(
-            dedup_by_public_key(vec![first, root("third", &key(), None)]).len(),
-            2
+            dedup_exact(vec![first.clone(), reissued.clone()]),
+            vec![first, reissued]
         );
+    }
+
+    #[test]
+    fn the_same_certificate_from_two_stores_appears_once() {
+        let der = root("shared", &key(), None);
+        assert_eq!(dedup_exact(vec![der.clone(), der.clone()]), vec![der]);
     }
 
     #[test]
     fn a_der_anchor_round_trips_through_pem() {
         let der = root("round", &key(), None);
-        let pem = pem_encode(&[der.clone()]);
+        let (pem, encoded) = pem_encode(&[der.clone()]);
         assert!(pem.starts_with(PEM_HEADER));
         assert!(pem.ends_with(b"\n"));
-        assert_eq!(pem_to_ders(&pem), vec![der]);
-        assert_eq!(count_anchors(&pem), 1);
+        assert_eq!(encoded, 1);
+        assert_eq!(parse_lenient(&pem), vec![der]);
     }
 
     #[test]
-    fn a_file_that_parses_to_no_certificate_counts_none() {
-        assert_eq!(parsed_anchors(b"# comment only\n"), 0);
-        assert_eq!(parsed_anchors(b"-----BEGIN CERTIFICATE-----\ntruncated\n"), 0);
-        assert_eq!(parsed_anchors(&pem_encode(&[root("parses", &key(), None)])), 1);
+    fn an_anchor_that_does_not_encode_is_absent_from_the_count() {
+        let der = root("encodes", &key(), None);
+        let (pem, encoded) = pem_encode(&[der.clone(), b"not a certificate".to_vec()]);
+        assert_eq!(encoded, 1);
+        assert_eq!(parse_lenient(&pem), vec![der]);
+    }
+
+    #[test]
+    fn a_file_that_parses_to_no_certificate_yields_no_anchor() {
+        assert!(parse_lenient(b"# comment only\n").is_empty());
+        assert!(parse_lenient(b"-----BEGIN CERTIFICATE-----\ntruncated\n").is_empty());
+    }
+
+    // A `ca-certificates.crt` with one malformed entry among many good ones is
+    // likelier than a file that holds nothing parseable, and `stack_from_pem`
+    // discards everything it had read when it meets the bad one.
+    #[test]
+    fn one_malformed_block_leaves_the_rest_of_the_file() {
+        let good = root("good", &key(), None);
+        let other = root("other", &key(), None);
+        let (first, _) = pem_encode(&[good.clone()]);
+        let (second, _) = pem_encode(&[other.clone()]);
+        let mut pem = first;
+        pem.extend_from_slice(b"-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n");
+        pem.extend_from_slice(&second);
+        assert_eq!(parse_lenient(&pem), vec![good, other]);
+        assert!(X509::stack_from_pem(&pem).is_err());
     }
 
     #[test]
@@ -554,5 +673,6 @@ mod tests {
         let bundle = bundled();
         assert_eq!(bundle.source, TrustSource::Bundled);
         assert!(bundle.retained > 100, "bundled anchors: {}", bundle.retained);
+        assert!(!parse_lenient(&bundle.pem).is_empty());
     }
 }
