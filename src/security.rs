@@ -79,6 +79,12 @@ impl<'a> SecurityHandler<'a> {
     }
 
     #[tracing::instrument(skip(self), level = "debug")]
+    /// Sets the host anchors with no user CA, for a request that carries no
+    /// security settings of its own.
+    pub(crate) fn configure_host_trust(&mut self) -> Result<()> {
+        self.configure_ca_certificates(&[])
+    }
+
     pub(crate) fn configure(&mut self, security: &SecurityConfig) -> Result<()> {
         tracing::info!("Configuring security settings");
 

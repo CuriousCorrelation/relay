@@ -69,9 +69,17 @@ pub(crate) struct TrustBundle {
 /// remove the public roots curl had already set on the handle.
 pub(crate) fn load() -> TrustBundle {
     match read_platform() {
-        Some(bundle) if !bundle.pem.is_empty() => bundle,
+        Some(bundle) if parsed_anchors(&bundle.pem) > 0 => bundle,
         _ => bundled(),
     }
+}
+
+/// Certificates OpenSSL can parse out of a PEM blob. A probed file that exists
+/// and holds comments, HTML from a captive portal, or a truncated write parses
+/// to none of them, and curl would then verify every public endpoint against
+/// an empty anchor set.
+fn parsed_anchors(pem: &[u8]) -> usize {
+    X509::stack_from_pem(pem).map(|s| s.len()).unwrap_or(0)
 }
 
 fn bundled() -> TrustBundle {
@@ -172,14 +180,48 @@ fn pem_to_ders(pem: &[u8]) -> Vec<Vec<u8>> {
         .unwrap_or_default()
 }
 
+/// What a domain says about one certificate. `Defer` passes the question to
+/// the next domain down, which is what an empty trust settings array means
+/// outside the System domain and what `Unspecified` means anywhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) enum Decision {
+    Trust,
+    Deny,
+    Defer,
+}
+
+/// Anchors from entries ordered by descending domain precedence, User first
+/// and System last. The first domain that decides a certificate settles it, so
+/// a root the System domain ships and an administrator denies is excluded
+/// rather than exported, and a certificate every domain defers on is absent.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn resolve_by_precedence(entries: Vec<(Vec<u8>, Vec<u8>, Decision)>) -> Vec<Vec<u8>> {
+    let mut settled: HashSet<Vec<u8>> = HashSet::new();
+    let mut out = Vec::new();
+    for (key, der, decision) in entries {
+        if decision == Decision::Defer || settled.contains(&key) {
+            continue;
+        }
+        settled.insert(key);
+        if decision == Decision::Trust {
+            out.push(der);
+        }
+    }
+    out
+}
+
 #[cfg(target_os = "macos")]
 fn read_platform() -> Option<TrustBundle> {
     use security_framework::trust_settings::{Domain, TrustSettings, TrustSettingsForCertificate};
 
-    let mut ders: Vec<Vec<u8>> = Vec::new();
+    let mut entries: Vec<(Vec<u8>, Vec<u8>, Decision)> = Vec::new();
     let mut read = 0usize;
 
-    for domain in [Domain::System, Domain::Admin, Domain::User] {
+    // User settings override Admin settings, which override what the System
+    // domain ships, so the domains are read in that order and the first
+    // decision on a certificate is the effective one.
+    for domain in [Domain::User, Domain::Admin, Domain::System] {
         let settings = TrustSettings::new(domain);
         let Ok(certificates) = settings.iter() else {
             tracing::debug!(domain = ?domain, "Trust domain unreadable");
@@ -188,32 +230,39 @@ fn read_platform() -> Option<TrustBundle> {
         for cert in certificates {
             read += 1;
             let der = cert.to_der();
-            match settings.tls_trust_settings_for_certificate(&cert) {
-                // An administrator's explicit SSL trust setting is kept without
-                // the extended key usage check, since the administrator already
-                // chose the policy.
+            let key = public_key_id(&der).unwrap_or_else(|| der.clone());
+            let decision = match settings.tls_trust_settings_for_certificate(&cert) {
+                // An administrator's explicit SSL trust setting is taken
+                // without the extended key usage check, since the
+                // administrator already chose the policy.
                 Ok(Some(TrustSettingsForCertificate::TrustRoot))
-                | Ok(Some(TrustSettingsForCertificate::TrustAsRoot)) => ders.push(der),
+                | Ok(Some(TrustSettingsForCertificate::TrustAsRoot)) => Decision::Trust,
+                Ok(Some(TrustSettingsForCertificate::Deny)) => Decision::Deny,
                 // An empty trust settings array means trusted in the System
-                // domain, where it is the default for every anchor Apple ships,
-                // and means defer to the next domain in Admin and User, so an
-                // anchor with an empty array is kept only from System.
+                // domain, where it is the default for every anchor Apple
+                // ships, and means defer in Admin and User.
                 Ok(None) if matches!(domain, Domain::System) => {
                     if valid_for_tls(&der) {
-                        ders.push(der);
+                        Decision::Trust
+                    } else {
+                        Decision::Deny
                     }
                 }
-                Ok(_) => {}
-                Err(e) => tracing::debug!(error = %e, "Trust settings read failed"),
-            }
+                Ok(_) => Decision::Defer,
+                Err(e) => {
+                    tracing::debug!(error = %e, "Trust settings read failed");
+                    Decision::Defer
+                }
+            };
+            entries.push((key, der, decision));
         }
     }
 
+    let ders = resolve_by_precedence(entries);
     if ders.is_empty() {
         return None;
     }
 
-    let ders = dedup_by_public_key(ders);
     Some(TrustBundle {
         source: TrustSource::MacosKeychain,
         pem: pem_encode(&ders),
@@ -234,11 +283,9 @@ fn read_platform() -> Option<TrustBundle> {
         CERT_SYSTEM_STORE_LOCAL_MACHINE_GROUP_POLICY,
     };
 
-    // Windows can install an enterprise CA into `ROOT` or `CA` in any of these
-    // locations, where `ROOT` has the self-signed anchors and `CA` has the
-    // intermediates a Group Policy push usually installs with them, and the
-    // group policy and enterprise locations are separate physical stores that
-    // the system view does not always merge.
+    // Windows can install an enterprise root into any of these locations, and
+    // the group policy and enterprise locations are separate physical stores
+    // that the system view does not always merge.
     const LOCATIONS: &[(u32, &str)] = &[
         (CERT_SYSTEM_STORE_LOCAL_MACHINE, "LocalMachine"),
         (CERT_SYSTEM_STORE_CURRENT_USER, "CurrentUser"),
@@ -255,7 +302,11 @@ fn read_platform() -> Option<TrustBundle> {
             "LocalMachineEnterprise",
         ),
     ];
-    const NAMES: &[&str] = &["ROOT", "CA"];
+    // `ROOT` alone. Every certificate in a `CURLOPT_CAINFO_BLOB` is a trust
+    // anchor, and the `CA` store holds intermediates that Windows chains
+    // through a root, so exporting it would let an intermediate anchor a
+    // chain that SChannel would reject.
+    const NAMES: &[&str] = &["ROOT"];
 
     let mut ders: Vec<Vec<u8>> = Vec::new();
     let mut read = 0usize;
@@ -456,6 +507,46 @@ mod tests {
         assert!(pem.ends_with(b"\n"));
         assert_eq!(pem_to_ders(&pem), vec![der]);
         assert_eq!(count_anchors(&pem), 1);
+    }
+
+    #[test]
+    fn a_file_that_parses_to_no_certificate_counts_none() {
+        assert_eq!(parsed_anchors(b"# comment only\n"), 0);
+        assert_eq!(parsed_anchors(b"-----BEGIN CERTIFICATE-----\ntruncated\n"), 0);
+        assert_eq!(parsed_anchors(&pem_encode(&[root("parses", &key(), None)])), 1);
+    }
+
+    #[test]
+    fn a_deny_in_a_higher_domain_drops_the_system_anchor() {
+        let der = root("denied", &key(), None);
+        let anchors = resolve_by_precedence(vec![
+            (b"k".to_vec(), der.clone(), Decision::Deny),
+            (b"k".to_vec(), der, Decision::Trust),
+        ]);
+        assert!(anchors.is_empty());
+    }
+
+    #[test]
+    fn a_defer_passes_the_question_to_the_next_domain() {
+        let der = root("deferred", &key(), None);
+        let anchors = resolve_by_precedence(vec![
+            (b"k".to_vec(), der.clone(), Decision::Defer),
+            (b"k".to_vec(), der.clone(), Decision::Trust),
+        ]);
+        assert_eq!(anchors, vec![der]);
+    }
+
+    #[test]
+    fn the_highest_domain_that_decides_settles_the_certificate() {
+        let trusted = root("user-trusted", &key(), None);
+        let other = root("other", &key(), None);
+        let anchors = resolve_by_precedence(vec![
+            (b"k".to_vec(), trusted.clone(), Decision::Trust),
+            (b"k".to_vec(), trusted.clone(), Decision::Deny),
+            (b"j".to_vec(), other.clone(), Decision::Deny),
+            (b"j".to_vec(), other, Decision::Trust),
+        ]);
+        assert_eq!(anchors, vec![trusted]);
     }
 
     #[test]
