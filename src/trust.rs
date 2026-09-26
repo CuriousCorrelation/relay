@@ -8,6 +8,11 @@
 //! installs enterprise CAs into the `ROOT` and `CA` stores. So this module
 //! reads the keychain on macOS and the certificate stores on Windows, and uses
 //! the probe on Linux, where the bundle file is the host store.
+//!
+//! The usage filter applies to the platforms that export a store, ∵ macOS and
+//! Windows both hold code signing and timestamping roots beside the TLS ones,
+//! where a `ca-certificates.crt` on Linux is a TLS anchor set already and its
+//! maintainer decided what belongs in it.
 
 use std::collections::HashSet;
 
@@ -269,7 +274,12 @@ fn decide(
             }
         }
         Ok(Some(TrustSettingsForCertificate::Deny)) => Decision::Deny,
-        Ok(None) if is_system => {
+        // An empty settings array and an explicit `Unspecified` both mean the
+        // default applies, and the default in the System domain is the trust
+        // Apple ships, so a root marked unspecified there is an anchor where
+        // its usage allows it. Treating it as a deferral dropped anchors the
+        // platform trusts.
+        Ok(None) | Ok(Some(TrustSettingsForCertificate::Unspecified)) if is_system => {
             if valid_for_tls(der) {
                 Decision::Trust
             } else {
@@ -528,7 +538,11 @@ fn read_platform() -> Option<TrustBundle> {
         Failed(Vec<(Vec<u8>, StoreUsage)>),
     }
 
-    fn read_store(flag: u32, label: &str, name: &str) -> StoreRead {
+    // The usage property decides whether a root may anchor a TLS chain, and a
+    // `Disallowed` entry is a revocation whatever its usage says, so the
+    // property is read for `ROOT` alone rather than logged over a store where
+    // it changes nothing.
+    fn read_store(flag: u32, label: &str, name: &str, with_usage: bool) -> StoreRead {
         let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
         let store = unsafe {
             CertOpenStore(
@@ -580,7 +594,12 @@ fn read_platform() -> Option<TrustBundle> {
                 std::slice::from_raw_parts((*ctx).pbCertEncoded, (*ctx).cbCertEncoded as usize)
             }
             .to_vec();
-            ders.push((der, store_usage(ctx)));
+            let usage = if with_usage {
+                store_usage(ctx)
+            } else {
+                StoreUsage::Unrestricted
+            };
+            ders.push((der, usage));
         }
         // Closed on the enumeration's only exit, so every store that opens is
         // released exactly once.
@@ -601,7 +620,7 @@ fn read_platform() -> Option<TrustBundle> {
     // every revocation already read still filters the compiled-in set.
     let mut revocations_known = true;
     for (flag, label) in LOCATIONS {
-        match read_store(*flag, label, "Disallowed") {
+        match read_store(*flag, label, "Disallowed", false) {
             StoreRead::Entries(entries) => {
                 revoked.extend(entries.into_iter().map(|(der, _)| der));
             }
@@ -618,7 +637,7 @@ fn read_platform() -> Option<TrustBundle> {
         }
         // A `ROOT` read that fails partway keeps what it read, ∵ those are
         // roots this machine trusts and the bundle below cannot supply them.
-        match read_store(*flag, label, "ROOT") {
+        match read_store(*flag, label, "ROOT", true) {
             StoreRead::Entries(entries) => {
                 read += entries.len();
                 roots.extend(entries);
@@ -635,10 +654,6 @@ fn read_platform() -> Option<TrustBundle> {
             }
         }
     }
-    if !revocations_known {
-        roots.clear();
-    }
-
     // A root Windows restricts to code signing or timestamping is still a TLS
     // anchor once it is in the blob, and the restriction lives in the store
     // entry's enhanced key usage property as often as in the certificate, so
@@ -662,6 +677,13 @@ fn read_platform() -> Option<TrustBundle> {
     let mut roots: Vec<Vec<u8>> = roots.into_iter().map(|(der, _)| der).collect();
     roots.retain(|der| valid_for_tls(der));
     roots.retain(|der| !revoked.contains(der));
+    // The host roots go where a revocation store would not read, ∵ a root
+    // exported against an unknown revocation set is one Windows may have
+    // revoked, and the restrictions collected above still filter the
+    // compiled-in set that stands in for them.
+    if !revocations_known {
+        roots.clear();
+    }
 
     // Windows fills `ROOT` on demand, so the store has only the roots this
     // machine has already needed, and the Automatic Root Certificates Update
@@ -713,6 +735,7 @@ fn read_platform() -> Option<TrustBundle> {
         }
     }
 
+    let read = ders.len();
     let ders = dedup_exact(ders);
     if ders.is_empty() {
         return None;
@@ -722,7 +745,7 @@ fn read_platform() -> Option<TrustBundle> {
     Some(TrustBundle {
         source: TrustSource::OpensslProbe,
         pem,
-        read: ders.len(),
+        read,
         retained,
     })
 }
@@ -842,6 +865,37 @@ mod tests {
             let der = root("system-kept", &key(), None);
             let system = vec![der.clone()];
             assert_eq!(system_anchor_count(&[der], &system), 1);
+        }
+
+        // `Unspecified` in the System domain means the default applies, and
+        // that default is the trust Apple ships, so treating it as a deferral
+        // dropped roots the platform trusts.
+        #[test]
+        fn an_unspecified_system_entry_is_trusted_where_its_usage_allows() {
+            let plain = root("system-unspecified", &key(), None);
+            assert_eq!(
+                decide(true, Ok(Some(TrustSettingsForCertificate::Unspecified)), &plain),
+                Decision::Trust
+            );
+            assert_eq!(
+                decide(
+                    true,
+                    Ok(Some(TrustSettingsForCertificate::Unspecified)),
+                    &code_signing("system-unspecified-signing")
+                ),
+                Decision::Deny
+            );
+        }
+
+        // Outside System the same value defers, ∵ the default there is whatever
+        // the domain below says.
+        #[test]
+        fn an_unspecified_user_entry_defers() {
+            let plain = root("user-unspecified", &key(), None);
+            assert_eq!(
+                decide(false, Ok(Some(TrustSettingsForCertificate::Unspecified)), &plain),
+                Decision::Defer
+            );
         }
 
         #[test]
