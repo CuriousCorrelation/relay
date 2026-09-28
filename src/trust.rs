@@ -10,7 +10,7 @@
 //! the probe on Linux, where the bundle file is the host store.
 //!
 //! The usage filter applies to the platforms that export a store, ∵ macOS and
-//! Windows both hold code signing and timestamping roots beside the TLS ones,
+//! Windows both keep code signing and timestamping roots beside the TLS ones,
 //! where a `ca-certificates.crt` on Linux is a TLS anchor set already and its
 //! maintainer decided what belongs in it.
 
@@ -88,8 +88,8 @@ pub(crate) fn load() -> TrustBundle {
 /// Certificates OpenSSL can parse out of a PEM blob, block by block, since
 /// `X509::stack_from_pem` discards every certificate it had already parsed
 /// when it meets a malformed one, and a `ca-certificates.crt` with a single
-/// bad entry among a hundred good ones is more likely than a file that holds
-/// nothing parseable at all.
+/// bad entry among a hundred good ones is more likely than a file with
+/// nothing parseable in it at all.
 fn parse_lenient(pem: &[u8]) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     let mut rest = pem;
@@ -177,7 +177,7 @@ fn dedup_exact(ders: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
     not(any(target_os = "macos", target_os = "windows")),
     allow(dead_code)
 )]
-/// The PEM blob and the anchors it holds, which is what the trust source line
+/// The PEM blob and the count of anchors in it, which is what the trust source line
 /// reports, since an anchor that fails re-encoding is absent from the blob and
 /// counting before this point would overstate what curl received.
 fn pem_encode(ders: &[Vec<u8>]) -> (Vec<u8>, usize) {
@@ -200,7 +200,7 @@ fn pem_encode(ders: &[Vec<u8>]) -> (Vec<u8>, usize) {
 /// True where the bytes parse as at least one PEM certificate, which is
 /// how a user entry is checked before it is added to the combined blob. The
 /// check is the lenient one the host store reads with, ∵ a bundle whose last
-/// block is corrupt still carries the CAs before it, and rejecting the entry
+/// block is corrupt still supplies the CAs before it, and rejecting the entry
 /// would drop them all.
 pub(crate) fn parses_as_pem(pem: &[u8]) -> bool {
     !parse_lenient(pem).is_empty()
@@ -376,7 +376,7 @@ fn read_platform() -> Option<TrustBundle> {
         // Where an Admin or User domain would not enumerate, the roots it
         // denies are unknown to every call this process can make, so the
         // subtraction covers the denials that were read and the warning above
-        // says which case this is. FE-1382 carries the limit.
+        // says which case this is. FE-1382 decides the limit.
         let mut bundled = parse_lenient(curl_sys::certs::get_cert_content().as_bytes());
         bundled.retain(|der| !denied.contains(der));
         ders.extend(bundled);
@@ -439,12 +439,12 @@ fn read_platform() -> Option<TrustBundle> {
     ];
 
     // Every certificate in a `CURLOPT_CAINFO_BLOB` is a trust anchor, and the
-    // `CA` store holds intermediates that Windows chains through a root, so
+    // `CA` store keeps intermediates that Windows chains through a root, so
     // anchors come from `ROOT` and `Disallowed` says which of them an
     // administrator has revoked.
     // What the store entry says a root may be used for. Windows keeps the
     // permitted purposes in the entry's enhanced key usage property, which
-    // `pbCertEncoded` does not carry, so a root restricted to code signing
+    // `pbCertEncoded` leaves out, so a root restricted to code signing
     // looks unrestricted to anything that reads the certificate alone.
     enum StoreUsage {
         Restricted(Vec<String>),
@@ -465,9 +465,9 @@ fn read_platform() -> Option<TrustBundle> {
     // comes back rather than being assembled here from the property and the
     // extension separately.
     //
-    // A zero usage count carries two meanings that only the last error tells
-    // apart, and the documented test is that `CRYPT_E_NOT_FOUND` means valid
-    // for every use while zero means valid for none. The error is cleared
+    // A zero usage count is ambiguous, and the documented test is the last
+    // error, `CRYPT_E_NOT_FOUND` for a certificate valid for every use and
+    // zero for one valid for none. The error is cleared
     // before each call, ∵ the enumeration around it ends with
     // `CRYPT_E_NOT_FOUND` of its own, which a certificate valid for no use
     // would otherwise inherit and be exported on.
@@ -493,9 +493,9 @@ fn read_platform() -> Option<TrustBundle> {
         if size < std::mem::size_of::<CTL_USAGE>() as u32 {
             return StoreUsage::Denied;
         }
-        // `CTL_USAGE` holds a pointer, so the buffer the API writes it
-        // into is allocated as words rather than bytes, ∵ a `Vec<u8>` carries
-        // no alignment the cast could rely on.
+        // `CTL_USAGE` declares a pointer member, so the buffer the API writes
+        // it into is allocated as words rather than bytes, ∵ a `Vec<u8>` gives
+        // the cast no alignment to rely on.
         let words = (size as usize).div_ceil(std::mem::size_of::<usize>());
         let mut buffer = vec![0usize; words];
         let usage = buffer.as_mut_ptr() as *mut CTL_USAGE;
@@ -618,7 +618,7 @@ fn read_platform() -> Option<TrustBundle> {
     // store returned certificates leaves the revocations of that location
     // unknown, and a root exported against an unknown revocation set is one
     // Windows may have revoked, so the host roots are dropped and the
-    // compiled-in set stands in, filtered by every revocation that was read.
+    // compiled-in set is used instead, filtered by every revocation that was read.
     let mut revocations_known = true;
     for (flag, label) in &locations {
         let from_this_location = match read_store(*flag, label, "ROOT", true) {
@@ -663,7 +663,7 @@ fn read_platform() -> Option<TrustBundle> {
     }
 
     // A root Windows restricts to code signing or timestamping is still a TLS
-    // anchor once it is in the blob, and the restriction lives in the store
+    // anchor once it is in the blob, and the restriction is recorded in the store
     // entry's enhanced key usage property as often as in the certificate, so
     // both are read.
     let permitted = |usage: &StoreUsage| match usage {
@@ -674,7 +674,7 @@ fn read_platform() -> Option<TrustBundle> {
         StoreUsage::Denied => false,
     };
     // A root the store entry keeps from TLS is also in the compiled-in set
-    // often enough that the union below would hand it back, so what the entry
+    // often enough that the union below would restore it, so what the entry
     // denies is subtracted from the bundle as well.
     let restricted: Vec<Vec<u8>> = roots
         .iter()
@@ -688,7 +688,7 @@ fn read_platform() -> Option<TrustBundle> {
     // The host roots go where a revocation store would not read, ∵ a root
     // exported against an unknown revocation set is one Windows may have
     // revoked, and the restrictions collected above still filter the
-    // compiled-in set that stands in for them.
+    // compiled-in set used in their place.
     if !revocations_known {
         roots.clear();
     }
@@ -1027,7 +1027,7 @@ mod tests {
     }
 
     // A `ca-certificates.crt` with one malformed entry among many good ones is
-    // likelier than a file that holds nothing parseable, and `stack_from_pem`
+    // likelier than a file with nothing parseable in it, and `stack_from_pem`
     // discards everything it had read when it meets the bad one.
     #[test]
     fn one_malformed_block_leaves_the_rest_of_the_file() {
