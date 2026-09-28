@@ -94,12 +94,24 @@ fn parse_lenient(pem: &[u8]) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     let mut rest = pem;
     while let Some(start) = find(rest, PEM_HEADER) {
-        let block = &rest[start..];
+        let block = &rest[start + PEM_HEADER.len()..];
+        // A block with no footer of its own ends where the next one begins,
+        // ∵ a footer found past that header belongs to the later block, and
+        // parsing the pair as one takes the later certificate down with the
+        // truncated one this scan is here to survive.
+        let next = find(block, PEM_HEADER);
         let end = match find(block, PEM_FOOTER) {
-            Some(e) => e + PEM_FOOTER.len(),
-            None => break,
+            Some(e) if next.is_none_or(|n| e < n) => e + PEM_FOOTER.len(),
+            _ => {
+                rest = match next {
+                    Some(n) => &block[n..],
+                    None => break,
+                };
+                continue;
+            }
         };
-        if let Ok(cert) = X509::from_pem(&block[..end]) {
+        let whole = &rest[start..start + PEM_HEADER.len() + end];
+        if let Ok(cert) = X509::from_pem(whole) {
             if let Ok(der) = cert.to_der() {
                 out.push(der);
             }
@@ -274,12 +286,14 @@ fn decide(
             }
         }
         Ok(Some(TrustSettingsForCertificate::Deny)) => Decision::Deny,
-        // An empty settings array and an explicit `Unspecified` both mean the
-        // default applies, and the default in the System domain is the trust
-        // Apple ships, so a root marked unspecified there is an anchor where
-        // its usage allows it. Treating it as a deferral dropped anchors the
-        // platform trusts.
-        Ok(None) | Ok(Some(TrustSettingsForCertificate::Unspecified)) if is_system => {
+        // `None` is what the domain answers for a certificate whose settings
+        // say nothing about TLS, and `security-framework` folds
+        // `Unspecified` and `Invalid` into it as well rather than returning
+        // them, so this arm is where an unspecified System entry arrives. The
+        // default it means is the trust Apple ships, so the certificate is an
+        // anchor where its usage allows one. FE-1386 covers the empty settings
+        // array, which Apple documents as trust and which arrives here too.
+        Ok(None) if is_system => {
             if valid_for_tls(der) {
                 Decision::Trust
             } else {
@@ -703,6 +717,7 @@ fn read_platform() -> Option<TrustBundle> {
     // compiled-in set used in their place.
     if !revocations_known {
         roots.clear();
+        read = 0;
     }
 
     // Windows fills `ROOT` on demand, so the store has only the roots this
@@ -843,6 +858,18 @@ mod tests {
             assert_eq!(decide(true, Ok(None), &der), Decision::Deny);
         }
 
+        // `security-framework` never answers `Unspecified`, it continues its
+        // scan and answers `None`, so the System rule is asserted through the
+        // value the keychain path actually produces.
+        #[test]
+        fn an_unspecified_system_entry_arrives_as_none_and_takes_the_usage_check() {
+            assert_eq!(
+                decide(true, Ok(Some(TrustSettingsForCertificate::Unspecified)), &root("unspecified", &key(), None)),
+                Decision::Defer
+            );
+            assert_eq!(decide(true, Ok(None), &root("plain-system", &key(), None)), Decision::Trust);
+        }
+
         // An administrator naming the policy has decided the question, and the
         // certificate's own usage does not overrule it.
         #[test]
@@ -885,37 +912,6 @@ mod tests {
             let der = root("system-kept", &key(), None);
             let system = vec![der.clone()];
             assert_eq!(system_anchor_count(&[der], &system), 1);
-        }
-
-        // `Unspecified` in the System domain means the default applies, and
-        // that default is the trust Apple ships, so treating it as a deferral
-        // dropped roots the platform trusts.
-        #[test]
-        fn an_unspecified_system_entry_is_trusted_where_its_usage_allows() {
-            let plain = root("system-unspecified", &key(), None);
-            assert_eq!(
-                decide(true, Ok(Some(TrustSettingsForCertificate::Unspecified)), &plain),
-                Decision::Trust
-            );
-            assert_eq!(
-                decide(
-                    true,
-                    Ok(Some(TrustSettingsForCertificate::Unspecified)),
-                    &code_signing("system-unspecified-signing")
-                ),
-                Decision::Deny
-            );
-        }
-
-        // Outside System the same value defers, ∵ the default there is whatever
-        // the domain below says.
-        #[test]
-        fn an_unspecified_user_entry_defers() {
-            let plain = root("user-unspecified", &key(), None);
-            assert_eq!(
-                decide(false, Ok(Some(TrustSettingsForCertificate::Unspecified)), &plain),
-                Decision::Defer
-            );
         }
 
         #[test]
@@ -1032,6 +1028,21 @@ mod tests {
         assert!(!parses_as_pem(b"not a certificate"));
     }
 
+    // A truncated block ahead of a good one used to swallow it, ∵ the footer
+    // search ran past the next header and the pair was parsed as one block.
+    #[test]
+    fn a_truncated_block_leaves_the_certificate_after_it() {
+        let (good, _) = pem_encode(&[root("after", &key(), None)]);
+        let mut mixed = b"-----BEGIN CERTIFICATE-----\ntruncated\n".to_vec();
+        mixed.extend_from_slice(&good);
+        assert_eq!(parse_lenient(&mixed).len(), 1);
+
+        let mut sandwiched = good.clone();
+        sandwiched.extend_from_slice(b"-----BEGIN CERTIFICATE-----\ntruncated\n");
+        sandwiched.extend_from_slice(&good);
+        assert_eq!(parse_lenient(&sandwiched).len(), 2);
+    }
+
     #[test]
     fn a_file_that_parses_to_no_certificate_yields_no_anchor() {
         assert!(parse_lenient(b"# comment only\n").is_empty());
@@ -1095,3 +1106,4 @@ mod tests {
         assert!(!parse_lenient(&bundle.pem).is_empty());
     }
 }
+
