@@ -621,44 +621,56 @@ fn read_platform() -> Option<TrustBundle> {
     // compiled-in set is used instead, filtered by every revocation that was read.
     let mut revocations_known = true;
     for (flag, label) in &locations {
-        let from_this_location = match read_store(*flag, label, "ROOT", true) {
-            Ok(entries) => entries,
+        // The revocations of a location apply to every anchor in the blob,
+        // including the compiled-in ones, so `Disallowed` is read wherever it
+        // opens and whatever that location's `ROOT` store did. A policy
+        // location that revokes a public CA and holds no root of its own is
+        // the case that makes the two reads independent.
+        let disallowed = read_store(*flag, label, "Disallowed", false);
+        let root = read_store(*flag, label, "ROOT", true);
+
+        match disallowed {
+            Ok(entries) => revoked.extend(entries.into_iter().map(|(der, _)| der)),
+            Err(StoreError::Incomplete(partial)) => {
+                tracing::warn!(
+                    location = %label,
+                    read = partial.len(),
+                    "Disallowed store read failed partway, revocations for this location are unknown"
+                );
+                revoked.extend(partial.into_iter().map(|(der, _)| der));
+                revocations_known = false;
+            }
+            // `CertOpenStore` gives no code for a store that is not
+            // provisioned, and a location with no `Disallowed` store at all is
+            // ordinary, so the read counts as unknown only where that location
+            // exists on the evidence of its `ROOT` store opening.
+            Err(StoreError::Open) => {
+                if root.is_ok() || matches!(root, Err(StoreError::Incomplete(_))) {
+                    tracing::warn!(
+                        location = %label,
+                        "Disallowed store did not open where the root store did, revocations for this location are unknown"
+                    );
+                    revocations_known = false;
+                }
+            }
+        }
+
+        match root {
+            Ok(entries) => {
+                read += entries.len();
+                roots.extend(entries);
+            }
             Err(StoreError::Incomplete(partial)) => {
                 tracing::warn!(
                     location = %label,
                     read = partial.len(),
                     "Root store read failed partway, keeping what it returned"
                 );
-                partial
+                read += partial.len();
+                roots.extend(partial);
             }
-            // Nothing opened here, so this location contributes no root and
-            // its revocations decide nothing.
-            Err(StoreError::Open) => continue,
-        };
-        if from_this_location.is_empty() {
-            continue;
-        }
-        read += from_this_location.len();
-        roots.extend(from_this_location);
-
-        match read_store(*flag, label, "Disallowed", false) {
-            Ok(entries) => revoked.extend(entries.into_iter().map(|(der, _)| der)),
-            Err(StoreError::Incomplete(partial)) => {
-                tracing::warn!(
-                    location = %label,
-                    read = partial.len(),
-                    "Disallowed store read failed partway, dropping the host roots"
-                );
-                revoked.extend(partial.into_iter().map(|(der, _)| der));
-                revocations_known = false;
-            }
-            Err(StoreError::Open) => {
-                tracing::warn!(
-                    location = %label,
-                    "Disallowed store did not open beside a populated root store, dropping the host roots"
-                );
-                revocations_known = false;
-            }
+            // Nothing opened here, so this location contributes no anchor.
+            Err(StoreError::Open) => {}
         }
     }
 
