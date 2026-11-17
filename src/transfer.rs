@@ -72,6 +72,20 @@ impl TransferHandler {
         cancel_token: &CancellationToken,
     ) -> Result<()> {
         tracing::debug!("Setting up transfer handlers");
+
+        // curl calls the progress callback only once progress meters are
+        // switched on, and that callback is the one point during `perform`
+        // where a cancel can stop the transfer. curl calls it about once a
+        // second even while no data arrives, so a cancel also stops a
+        // request whose server never answers.
+        handle.progress(true).map_err(|e| {
+            tracing::error!(error = %e, "Failed to enable progress callback");
+            RelayError::Network {
+                message: "Failed to enable progress callback".into(),
+                cause: Some(e.to_string()),
+            }
+        })?;
+
         let mut transfer = handle.transfer();
 
         let body = &mut self.body;
