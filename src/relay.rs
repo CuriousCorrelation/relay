@@ -6,7 +6,7 @@ use std::{
     time::SystemTime,
 };
 
-use curl::easy::Easy;
+use curl::easy::{Easy, InfoType};
 use dashmap::DashMap;
 use http::StatusCode;
 use tokio_util::sync::CancellationToken;
@@ -38,7 +38,10 @@ fn execute_request(request: &Request, cancel_token: &CancellationToken) -> Resul
     let mut curl_request = CurlRequest::new(&mut handle, request);
     curl_request.prepare()?;
 
-    tracing::debug!(request = ?request, "Full request details before sending");
+    // The `Request` debug output includes the auth credentials, the client
+    // key, the proxy password and the body, so only the method and URL are
+    // logged.
+    tracing::debug!(method = %request.method, url = %request.url, "Sending request");
 
     handle.verbose(true).map_err(|e| RelayError::Network {
         message: "Failed to set verbose mode".into(),
@@ -47,6 +50,13 @@ fn execute_request(request: &Request, cancel_token: &CancellationToken) -> Resul
 
     handle
         .debug_function(|info_type, data| {
+            // `InfoType::Text` is curl's own commentary on connect, TLS and
+            // redirects. The header and data types repeat the request and
+            // response bytes, the `Authorization` and `Cookie` headers and
+            // the body included, so they are dropped.
+            if !matches!(info_type, InfoType::Text) {
+                return;
+            }
             if let Ok(s) = std::str::from_utf8(data) {
                 tracing::debug!(info_type = ?info_type, s = ?s, "cURL debug fn");
             }
@@ -148,8 +158,6 @@ pub async fn execute(request: Request) -> Result<Response> {
 
     ACTIVE_REQUESTS.remove(&request_id);
     tracing::debug!("Request execution completed");
-
-    tracing::debug!("Result {:#?}", result);
 
     result
 }

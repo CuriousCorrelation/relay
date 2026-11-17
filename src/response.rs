@@ -111,7 +111,10 @@ impl ResponseHandler {
                 match cookie::Cookie::parse(line) {
                     Ok(parsed) => Some(Self::to_interop_cookie(&parsed)),
                     Err(e) => {
-                        tracing::warn!(error = %e, raw = %line, "Skipping unparseable Set-Cookie");
+                        // The cookie value is a session credential, so the
+                        // record names the cookie alone.
+                        let name = line.split_once('=').map(|(name, _)| name.trim());
+                        tracing::warn!(error = %e, name = ?name, "Skipping unparseable Set-Cookie");
                         None
                     }
                 }

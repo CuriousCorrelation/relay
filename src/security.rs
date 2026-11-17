@@ -124,7 +124,9 @@ impl<'a> SecurityHandler<'a> {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self), level = "debug")]
+    // The `CertificateConfig` debug output includes the client key and the
+    // PKCS#12 password, so the span leaves it out.
+    #[tracing::instrument(skip(self, certs), level = "debug")]
     fn configure_certificates(&mut self, certs: &CertificateConfig) -> Result<()> {
         if let Some(ref client_cert) = certs.client {
             match client_cert {
