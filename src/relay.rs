@@ -49,9 +49,8 @@ fn execute_request(request: &Request, cancel_token: &CancellationToken) -> Resul
     let mut curl_request = CurlRequest::new(&mut handle, request);
     curl_request.prepare()?;
 
-    // The `Request` debug output includes the auth credentials, the client
-    // key, the proxy password and the body, so only the method and URL are
-    // logged.
+    // Marks where curl starts sending, with the method and the URL, its
+    // userinfo and query values redacted.
     tracing::debug!(method = %request.method, url = %crate::util::redact_url(&request.url), "Sending request");
 
     handle.verbose(true).map_err(|e| RelayError::Network {
