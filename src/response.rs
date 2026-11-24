@@ -113,8 +113,8 @@ impl ResponseHandler {
                     Ok(parsed) => Some(Self::to_interop_cookie(&parsed, now)),
                     Err(e) => {
                         // The cookie value is a session credential, so the
-                        // record names the cookie alone.
-                        let name = line.split_once('=').map(|(name, _)| name.trim());
+                        // record logs the cookie's name alone.
+                        let name = Self::cookie_name(line);
                         tracing::warn!(error = %e, name = ?name, "Skipping unparseable Set-Cookie");
                         None
                     }
@@ -123,6 +123,16 @@ impl ResponseHandler {
             .collect();
 
         (!cookies.is_empty()).then_some(cookies)
+    }
+
+    /// Returns the name of the `name=value` pair a `Set-Cookie` line opens
+    /// with. A line whose first `;` segment has no `=` has no name, so
+    /// `abc123; Path=/` returns `None` and its value isn't logged.
+    fn cookie_name(line: &str) -> Option<&str> {
+        line.split(';')
+            .next()
+            .and_then(|pair| pair.split_once('='))
+            .map(|(name, _)| name.trim())
     }
 
     fn to_interop_cookie(c: &cookie::Cookie<'_>, now: OffsetDateTime) -> Cookie {
@@ -259,6 +269,15 @@ mod tests {
     fn expires(set_cookie: &str) -> Option<OffsetDateTime> {
         let parsed = cookie::Cookie::parse(set_cookie).expect("parse");
         ResponseHandler::to_interop_cookie(&parsed, at(NOW_UNIX)).expires
+    }
+
+    #[test]
+    fn an_unparseable_set_cookie_logs_the_name_alone() {
+        assert_eq!(
+            ResponseHandler::cookie_name("sid=abc123; Path=/"),
+            Some("sid")
+        );
+        assert_eq!(ResponseHandler::cookie_name("abc123; Path=/"), None);
     }
 
     #[test]
